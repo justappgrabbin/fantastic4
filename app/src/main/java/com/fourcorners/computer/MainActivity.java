@@ -174,5 +174,5 @@ public class MainActivity extends Activity {
             database.execSQL("INSERT INTO packages VALUES(?,?,?,?,?)",new Object[]{id,name,hash.toString(),size,inventory.toString()});
         } catch(Exception error){saved.delete();throw error;}
     }
-    @Override protected void onDestroy(){closing=true;if(runtime!=null)runtime.stop();super.onDestroy();worker.shutdownNow();}
+    @Override protected void onDestroy(){closing=true;if(runtime!=null)runtime.cancel();super.onDestroy();worker.shutdownNow();}
 }

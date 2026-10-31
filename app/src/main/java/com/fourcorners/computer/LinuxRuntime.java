@@ -35,6 +35,7 @@ final class LinuxRuntime {
     private final String sessionToken;
     private final StringBuilder outputTail = new StringBuilder();
     private volatile Process process;
+    private volatile boolean cancelled;
     private volatile boolean verified;
 
     LinuxRuntime(Context context, String sessionToken) {
@@ -108,6 +109,7 @@ final class LinuxRuntime {
     }
 
     private void launch(LinuxRootfsInstaller.Result installed, boolean noSeccomp) throws Exception {
+        if (cancelled) throw new InterruptedException("Activity closed during Linux startup");
         File nativeDir = new File(context.getApplicationInfo().nativeLibraryDir);
         File proot = new File(nativeDir, "libproot.so");
         File loader = new File(nativeDir, "libproot-loader.so");
@@ -167,7 +169,7 @@ final class LinuxRuntime {
     private void verifyGuestRuntime() throws Exception {
         long deadline = SystemClock.elapsedRealtime() + 180_000L;
         Exception last = null;
-        while (SystemClock.elapsedRealtime() < deadline) {
+        while (!cancelled && SystemClock.elapsedRealtime() < deadline) {
             if (!isAlive(process)) {
                 throw new IllegalStateException("PRoot guest exited before Synthia 5.8 became ready: " + tail());
             }
@@ -236,6 +238,8 @@ final class LinuxRuntime {
     private synchronized String tail() {
         return outputTail.toString();
     }
+
+    void cancel() { cancelled = true; stop(); }
 
     void stop() {
         verified = false;

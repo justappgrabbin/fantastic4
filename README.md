@@ -24,8 +24,8 @@ The host currently runs while the Activity exists; reliable background service o
 ## Verification
 
     node scripts/verify-lineage.mjs
-    node --test --test-isolation=none runtime/test/*.test.mjs
-    node --test --test-isolation=none runtime/vendor/ato-core/test/*.test.mjs
+    node --test runtime/test/*.test.mjs
+    node --test runtime/vendor/ato-core/test/*.test.mjs
     python -m unittest discover -s runtime/vendor/modelmaker -p test_contracts.py -v
 
 `node runtime/test/http-smoke.mjs` tests authenticated loopback execution and restart persistence on hosts permitting sockets. Local sandbox blocks sockets; Actions runs this check instead.

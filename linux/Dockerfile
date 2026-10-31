@@ -5,7 +5,7 @@ RUN apk add --no-cache ca-certificates tzdata
 COPY runtime /opt/fantastic4
 RUN mkdir -p /var/lib/synthai /root /tmp \
     && node --check /opt/fantastic4/server.mjs \
-    && node --test --test-isolation=none /opt/fantastic4/test/*.test.mjs
+    && node --test /opt/fantastic4/test/*.test.mjs
 WORKDIR /opt/fantastic4
 ENV PORT=4183
 ENV SYNTHIA_DATA_DIR=/var/lib/synthai

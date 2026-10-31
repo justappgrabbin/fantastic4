@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile, rename, readdir } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import { Automaton, AutomataMesh } from './vendor/ato-core/src/index.mjs';
 import { IntegratedToolFactory, ATONativeBridge } from './vendor/tool-factory/src/integrated-tool-factory.mjs';
 import { MCPHub } from './vendor/adaya/MCPHub.js';
@@ -57,7 +58,8 @@ export class Harness {
    if(module.manifest.id!==generated.tool.id)throw new Error('Exported identity mismatch');
    const replay=await module.execute(p.input??'');
    // Exports carry learned state; a second call may deliberately increment counts.
-   if(replay===undefined)throw new Error('Exported tool did not execute');
+   const expectedReplay=await generated.tool.execute(p.input??'');
+   if(!isDeepStrictEqual(replay,expectedReplay))throw new Error('Exported tool output differs from the original runtime');
    return {success:true,kind:'tool',checked:true,artifact,manifest:exported.manifest,output,replay,limits:'Bounded original runtime families; not arbitrary algorithm generation'};
   }
   if(corner.id==='neural-net-maker'){
