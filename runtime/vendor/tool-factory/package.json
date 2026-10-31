@@ -1,0 +1,14 @@
+{
+  "name": "@cynthia/integrated-tool-factory",
+  "version": "1.6.0",
+  "type": "module",
+  "description": "Deterministic five-dimensional tool synthesis core for ATO",
+  "exports": "./src/integrated-tool-factory.mjs",
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "demo": "node demo.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

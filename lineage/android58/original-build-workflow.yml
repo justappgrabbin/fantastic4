@@ -1,0 +1,303 @@
+name: Build GitHub-Only SynthAI App
+
+on:
+  push:
+    branches:
+      - integration/github-only-app-20260923
+      - 'hover/**'
+  pull_request:
+    branches:
+      - main
+      - integration/github-only-app-20260923
+      - recovery/computer-visible-home-smoke-20260925
+    paths:
+      - '.github/workflows/github-only-app.yml'
+      - '.github/scripts/arm64-backend-smoke.mjs'
+      - '.github/scripts/android-smoke.sh'
+      - '.github/scripts/arm64-hover-smoke.mjs'
+      - '.github/scripts/android-hover-smoke.sh'
+      - 'android-app/**'
+      - 'computer/**'
+      - 'public/**'
+  workflow_dispatch:
+
+concurrency:
+  group: github-only-app-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify-and-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout repository and donor submodule
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Use Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Use Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install ephemeris runtime needed by Computer tests
+        run: python -m pip install --disable-pip-version-check ephem
+
+      - name: Verify canonical Computer and local backend
+        run: npm test
+
+      - name: Copy the verified browser surface into Android assets
+        run: |
+          # Shared (both faces): licenses. Venom only: the Computer browser surface.
+          rm -rf android-app/app/src/main/assets android-app/app/src/venom/assets android-app/app/src/hover/assets
+          mkdir -p android-app/app/src/main/assets/licenses android-app/app/src/venom/assets android-app/app/src/hover/assets
+          cp -R public/. android-app/app/src/venom/assets/
+          cp android-app/THIRD_PARTY_NOTICES.md android-app/app/src/main/assets/licenses/THIRD_PARTY_NOTICES.md
+
+      - name: Enable ARM64 container image builds
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Check out pinned Synthia Server for the embedded rootfs
+        uses: actions/checkout@v4
+        with:
+          repository: justappgrabbin/Synthia-server
+          ref: cc22370a1c8670fb9bdec167267c098306ecf502
+          path: synthia-server
+          persist-credentials: false
+
+      - name: Verify pinned Synthia Server checkout
+        run: |
+          test "$(git -C synthia-server rev-parse HEAD)" = "cc22370a1c8670fb9bdec167267c098306ecf502"
+          rm -rf synthia-server/.git
+          test -f synthia-server/server/lite.js
+          test -f synthia-server/server/computer-github-routes.js
+          test -f synthia-server/render-server.py
+          test -f synthia-server/requirements-mobile.txt
+
+      - name: Build embedded ARM64 Linux Computer rootfs
+        run: |
+          rm -rf /tmp/synthai-linux-rootfs
+          docker buildx build \
+            --platform linux/arm64 \
+            --file android-app/linux/Dockerfile \
+            --tag "synthai-computer-arm64:$GITHUB_SHA" \
+            --load \
+            .
+          node .github/scripts/arm64-backend-smoke.mjs "synthai-computer-arm64:$GITHUB_SHA"
+          mkdir -p /tmp/synthai-linux-rootfs
+          container="$(docker create --platform linux/arm64 "synthai-computer-arm64:$GITHUB_SHA")"
+          docker export "$container" | tar -C /tmp/synthai-linux-rootfs -xf -
+          docker rm "$container"
+          test -f /tmp/synthai-linux-rootfs/opt/synthai/computer/backend/local-server.mjs
+          test -x /tmp/synthai-linux-rootfs/usr/local/bin/node
+          test -x /tmp/synthai-linux-rootfs/usr/bin/python3
+          test -f /tmp/synthai-linux-rootfs/opt/synthia-server/server/lite.js
+          test -f /tmp/synthai-linux-rootfs/opt/synthia-server/render-server.py
+          test -d /tmp/synthai-linux-rootfs/opt/synthia-server/node_modules/express
+          # Vendored Synthia 5.8 belongs to the hover face only (Dockerfile.dockerignore).
+          test ! -e /tmp/synthai-linux-rootfs/opt/synthai/computer/donors/synthia58
+          tar --hard-dereference -C /tmp/synthai-linux-rootfs -czf android-app/app/src/venom/assets/linux-rootfs.bundle .
+          printf '%s-synthia-embedded-1\n' "$GITHUB_SHA" > android-app/app/src/venom/assets/linux-rootfs.version
+          du -h android-app/app/src/venom/assets/linux-rootfs.bundle
+          sudo rm -rf /tmp/synthai-linux-rootfs
+
+      - name: Build hover ARM64 rootfs (Alpine + Node 22 + Synthia 5.8, no Synthia Server, no Python)
+        run: |
+          rm -rf /tmp/synthia-hover-rootfs
+          docker buildx build \
+            --platform linux/arm64 \
+            --file android-app/linux/Dockerfile.hover \
+            --tag "synthia-hover-arm64:$GITHUB_SHA" \
+            --load \
+            .
+          node .github/scripts/arm64-hover-smoke.mjs "synthia-hover-arm64:$GITHUB_SHA"
+          mkdir -p /tmp/synthia-hover-rootfs
+          container="$(docker create --platform linux/arm64 "synthia-hover-arm64:$GITHUB_SHA")"
+          docker export "$container" | tar -C /tmp/synthia-hover-rootfs -xf -
+          docker rm "$container"
+          test -f /tmp/synthia-hover-rootfs/opt/synthia58/src/ui/server.mjs
+          test -f /tmp/synthia-hover-rootfs/opt/synthia58/ui/index.html
+          test -x /tmp/synthia-hover-rootfs/usr/local/bin/node
+          test -d /tmp/synthia-hover-rootfs/var/lib/synthai
+          test ! -e /tmp/synthia-hover-rootfs/usr/bin/python3
+          test ! -e /tmp/synthia-hover-rootfs/opt/synthia-server
+          test ! -e /tmp/synthia-hover-rootfs/opt/synthai
+          # Vendored 5.8 app must be byte-identical inside the rootfs.
+          diff -r computer/donors/synthia58/Synthia-Solo-Hover-v0.5.8 /tmp/synthia-hover-rootfs/opt/synthia58
+          tar --hard-dereference -C /tmp/synthia-hover-rootfs -czf android-app/app/src/hover/assets/linux-rootfs.bundle .
+          printf '%s-synthia58-hover-1\n' "$GITHUB_SHA" > android-app/app/src/hover/assets/linux-rootfs.version
+          du -h android-app/app/src/hover/assets/linux-rootfs.bundle
+          sudo rm -rf /tmp/synthia-hover-rootfs
+
+      - name: Use Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install Android SDK 35 without obsolete tools package
+        uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
+          log-accepted-android-sdk-licenses: 'false'
+
+      - name: Install Android NDK r28
+        run: sdkmanager 'ndk;28.0.13004108'
+
+      - name: Build Android ARM64 PRoot bridge from pinned source
+        env:
+          OPENMINIS_COMMIT: 4ef29002e88db1e20e462ec2ff46916e8a7dcb45
+          NDK_VERSION: 28.0.13004108
+        run: |
+          rm -rf /tmp/openminis
+          git clone https://github.com/OpenMinis/OpenMinis.git /tmp/openminis
+          git -C /tmp/openminis checkout "$OPENMINIS_COMMIT"
+          git -C /tmp/openminis submodule update --init --recursive
+          export ANDROID_NDK_HOME="$ANDROID_SDK_ROOT/ndk/$NDK_VERSION"
+          bash /tmp/openminis/deps/build_proot.sh
+
+          rm -rf android-app/app/src/main/jniLibs
+          mkdir -p android-app/app/src/main/jniLibs/arm64-v8a
+          cp /tmp/openminis/src/android/app/src/main/jniLibs/arm64-v8a/libproot.so android-app/app/src/main/jniLibs/arm64-v8a/
+          cp /tmp/openminis/src/android/app/src/main/jniLibs/arm64-v8a/libproot-loader.so android-app/app/src/main/jniLibs/arm64-v8a/
+          cp /tmp/openminis/src/android/app/src/main/jniLibs/arm64-v8a/libproot-loader32.so android-app/app/src/main/jniLibs/arm64-v8a/
+
+          test "$(sha256sum android-app/app/src/main/jniLibs/arm64-v8a/libproot-loader.so | awk '{print $1}')" = "44ef39c1e1a18c09f6e4c4b5d6f8bba82d30596598bd155ec162d05c5122ff04"
+          test "$(sha256sum android-app/app/src/main/jniLibs/arm64-v8a/libproot-loader32.so | awk '{print $1}')" = "25f6bd90bc5a3d3088026289a0d3eaf3e502bd2b00e5cb74fadd9791132efa34"
+
+          PROOT_COMMIT="$(git -C /tmp/openminis/deps/proot rev-parse HEAD)"
+          {
+            echo "OpenMinis commit: $OPENMINIS_COMMIT"
+            echo "PRoot commit: $PROOT_COMMIT"
+            echo "Android NDK: $NDK_VERSION"
+            echo "PRoot source: https://github.com/OpenMinis/proot"
+            echo "OpenMinis source: https://github.com/OpenMinis/OpenMinis"
+          } > android-app/app/src/main/assets/licenses/linux-runtime-provenance.txt
+
+          PROOT_LICENSE="$(find /tmp/openminis/deps/proot -maxdepth 2 -type f \( -iname 'COPYING*' -o -iname 'LICENSE*' \) | head -n 1)"
+          test -n "$PROOT_LICENSE"
+          cp "$PROOT_LICENSE" android-app/app/src/main/assets/licenses/PRoot-LICENSE.txt
+
+          mkdir -p android-app/app/src/main/jniLibs/x86_64
+          cat > /tmp/synthai-abi-shim.c <<'EOF'
+          int synthai_container_abi_placeholder(void) { return 0; }
+          EOF
+          "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android26-clang" \
+            -shared -fPIC /tmp/synthai-abi-shim.c \
+            -o android-app/app/src/main/jniLibs/x86_64/libsynthai-container-abi-placeholder.so
+
+      - name: Install Gradle 8.7
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Build self-contained debug APKs (venom + hover faces)
+        working-directory: android-app
+        run: gradle --no-daemon :app:assembleVenomDebug :app:assembleHoverDebug
+
+      - name: Verify self-contained APK payload (venom)
+        run: |
+          APK=android-app/app/build/outputs/apk/venom/debug/app-venom-debug.apk
+          unzip -l "$APK" | tee /tmp/apk-tree.txt
+          grep -q 'assets/linux-rootfs.bundle' /tmp/apk-tree.txt
+          unzip -p "$APK" assets/linux-rootfs.bundle | gzip -t
+          grep -q 'assets/linux-rootfs.version' /tmp/apk-tree.txt
+          grep -q 'lib/arm64-v8a/libproot.so' /tmp/apk-tree.txt
+          grep -q 'lib/arm64-v8a/libproot-loader.so' /tmp/apk-tree.txt
+          grep -q 'lib/arm64-v8a/libproot-loader32.so' /tmp/apk-tree.txt
+          grep -q 'assets/computer-runtime/BrowserComputerRuntime.mjs' /tmp/apk-tree.txt
+          grep -q 'assets/licenses/linux-runtime-provenance.txt' /tmp/apk-tree.txt
+          grep -q 'assets/computer-runtime/services/task-fit.mjs' /tmp/apk-tree.txt
+          grep -q 'assets/computer-runtime/residents/synthia57-resident.mjs' /tmp/apk-tree.txt
+          unzip -p "$APK" assets/linux-rootfs.version > /tmp/venom-rootfs.version
+          grep -q -- '-synthia-embedded-1$' /tmp/venom-rootfs.version
+          "$ANDROID_SDK_ROOT/build-tools/35.0.0/aapt2" dump badging "$APK" > /tmp/venom-badging.txt
+          sed -n '1,8p' /tmp/venom-badging.txt
+          grep -q "package: name='app.synthai.computer'" /tmp/venom-badging.txt
+          grep -Eq "application-label:'SynthAI Computer'|application: label='SynthAI Computer'" /tmp/venom-badging.txt
+          grep -q "launchable-activity: name='app.synthai.computer.MainActivity'" /tmp/venom-badging.txt
+
+      - name: Verify self-contained APK payload (hover)
+        run: |
+          APK=android-app/app/build/outputs/apk/hover/debug/app-hover-debug.apk
+          unzip -l "$APK" | tee /tmp/hover-apk-tree.txt
+          grep -q 'assets/linux-rootfs.bundle' /tmp/hover-apk-tree.txt
+          unzip -p "$APK" assets/linux-rootfs.bundle | gzip -t
+          unzip -p "$APK" assets/linux-rootfs.bundle | tar -tzf - > /tmp/hover-rootfs-list.txt
+          grep -q '^./opt/synthia58/src/ui/server.mjs$' /tmp/hover-rootfs-list.txt
+          if grep -q '^./opt/synthia-server/' /tmp/hover-rootfs-list.txt; then echo "hover rootfs must not ship Synthia Server"; exit 1; fi
+          if grep -q '^./usr/bin/python3' /tmp/hover-rootfs-list.txt; then echo "hover rootfs must not ship Python"; exit 1; fi
+          unzip -p "$APK" assets/linux-rootfs.version > /tmp/hover-rootfs.version
+          grep -q -- '-synthia58-hover-1$' /tmp/hover-rootfs.version
+          grep -q 'lib/arm64-v8a/libproot.so' /tmp/hover-apk-tree.txt
+          grep -q 'lib/arm64-v8a/libproot-loader.so' /tmp/hover-apk-tree.txt
+          grep -q 'lib/arm64-v8a/libproot-loader32.so' /tmp/hover-apk-tree.txt
+          grep -q 'assets/licenses/linux-runtime-provenance.txt' /tmp/hover-apk-tree.txt
+          if grep -q 'assets/computer-runtime/' /tmp/hover-apk-tree.txt; then echo "hover APK must not ship the Computer surface"; exit 1; fi
+          "$ANDROID_SDK_ROOT/build-tools/35.0.0/aapt2" dump badging "$APK" > /tmp/hover-badging.txt
+          cat /tmp/hover-badging.txt
+          grep -q "package: name='app.synthai.hover'" /tmp/hover-badging.txt
+          grep -Eq "application-label:'Synthia'|application: label='Synthia'" /tmp/hover-badging.txt
+          grep -q "launchable-activity: name='app.synthai.hover.MainActivity'" /tmp/hover-badging.txt
+          for perm in SYSTEM_ALERT_WINDOW FOREGROUND_SERVICE FOREGROUND_SERVICE_SPECIAL_USE POST_NOTIFICATIONS RECORD_AUDIO; do
+            grep -q "uses-permission: name='android.permission.$perm'" /tmp/hover-badging.txt
+          done
+          "$ANDROID_SDK_ROOT/build-tools/35.0.0/aapt2" dump xmltree --file AndroidManifest.xml "$APK" > /tmp/hover-manifest.txt
+          grep -q 'app.synthai.hover.SynthiaAccessibilityService' /tmp/hover-manifest.txt
+          grep -q 'android.permission.BIND_ACCESSIBILITY_SERVICE' /tmp/hover-manifest.txt
+          grep -q 'app.synthai.hover.BridgeForegroundService' /tmp/hover-manifest.txt
+          grep -q 'app.synthai.hover.OverlayService' /tmp/hover-manifest.txt
+
+      - name: Enable KVM for Android emulator
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Verify APK browser surface boots on Android x86_64
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          script: bash .github/scripts/android-smoke.sh && bash .github/scripts/android-hover-smoke.sh
+
+      - name: Record APK checksums
+        run: |
+          cd android-app/app/build/outputs/apk
+          (cd venom/debug && sha256sum app-venom-debug.apk | tee app-venom-debug.apk.sha256)
+          (cd hover/debug && sha256sum app-hover-debug.apk | tee app-hover-debug.apk.sha256)
+          ls -l venom/debug hover/debug
+
+      - name: Upload installable self-contained APK (venom)
+        uses: actions/upload-artifact@v4
+        with:
+          name: SynthAI-Computer-self-contained-debug
+          path: |
+            android-app/app/build/outputs/apk/venom/debug/app-venom-debug.apk
+            android-app/app/build/outputs/apk/venom/debug/app-venom-debug.apk.sha256
+          if-no-files-found: error
+
+      - name: Upload installable Synthia Hover APK (hover)
+        uses: actions/upload-artifact@v4
+        with:
+          name: Synthia-Hover-5.8-debug
+          path: |
+            android-app/app/build/outputs/apk/hover/debug/app-hover-debug.apk
+            android-app/app/build/outputs/apk/hover/debug/app-hover-debug.apk.sha256
+          if-no-files-found: error

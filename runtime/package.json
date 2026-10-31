@@ -1,0 +1,9 @@
+{
+  "name": "fantastic4-runtime",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test --test-isolation=none test/*.test.mjs",
+    "start": "node server.mjs"
+  }
+}

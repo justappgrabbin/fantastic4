@@ -1,0 +1,6 @@
+gradio>=5.44,<6
+huggingface_hub>=0.34,<1
+safetensors>=0.4,<1
+tokenizers>=0.22,<0.23
+torch>=2.6,<3
+transformers==4.56.2

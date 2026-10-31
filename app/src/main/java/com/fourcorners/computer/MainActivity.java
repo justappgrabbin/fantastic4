@@ -16,10 +16,17 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.zip.ZipInputStream;
 import java.util.zip.ZipEntry;
+import org.json.JSONObject;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
 
 /** Native offline workspace. No WebView, server, network permission or simulated inference. */
 public class MainActivity extends Activity {
     private SQLiteDatabase database;
+    private LinuxRuntime runtime;
+    private String sessionToken;
+    private volatile boolean closing;
     private LinearLayout body;
     private TextView status;
     private Button intake;
@@ -36,7 +43,14 @@ public class MainActivity extends Activity {
         database = openOrCreateDatabase("workspace.db", MODE_PRIVATE, null);
         database.execSQL("CREATE TABLE IF NOT EXISTS packages(id TEXT PRIMARY KEY,name TEXT,digest TEXT,bytes INTEGER,inventory TEXT)");
         database.execSQL("CREATE TABLE IF NOT EXISTS jobs(id TEXT PRIMARY KEY,agent TEXT,directive TEXT,status TEXT)");
+        sessionToken = getPreferences(MODE_PRIVATE).getString("runtimeToken", null);
+        if (sessionToken == null) { sessionToken = UUID.randomUUID().toString() + UUID.randomUUID().toString(); getPreferences(MODE_PRIVATE).edit().putString("runtimeToken", sessionToken).apply(); }
+        runtime = new LinuxRuntime(this, sessionToken);
         home();
+        worker.execute(() -> {
+            try { runtime.startAndVerify(); runOnUiThread(() -> { if (!closing) status.setText("Local Linux engine ready · original tool belts connected"); }); }
+            catch (Exception error) { runOnUiThread(() -> { if (!closing) status.setText("Linux engine unavailable: " + error.getMessage()); }); }
+        });
     }
     private TextView text(String value, int size) {
         TextView view = new TextView(this); view.setText(value); view.setTextSize(size);
@@ -53,13 +67,14 @@ public class MainActivity extends Activity {
     }
     private void home() {
         screen("Four Corners"); text("Your workspace lives on this phone.",16);
-        text("Native foundation · original engines and inference are not connected yet.",14);
+        text("Original ATO, Tool Factory and neural-composition engines · no autonomous model planner yet.",14);
         intake = button("Bring a piece", () -> {
             Intent pick = new Intent(Intent.ACTION_OPEN_DOCUMENT); pick.setType("*/*"); pick.addCategory(Intent.CATEGORY_OPENABLE);
             startActivityForResult(pick,1);
         });
         status = text("Sources are retained in private device storage.",14);
         for (int i=0;i<names.length;i++) { final int corner=i; button(names[i], () -> agent(corner)); }
+        button("Engine jobs & results", this::engineJobs);
         text("Your pieces",22);
         try(Cursor cursor=database.rawQuery("SELECT id,name FROM packages ORDER BY rowid DESC",null)) {
             if(cursor.getCount()==0) text("Nothing imported yet.",16);
@@ -69,7 +84,7 @@ public class MainActivity extends Activity {
     }
     private void agent(int index) {
         screen(names[index]); text(directives[index],18);
-        text(index==0?"Package inspection is connected. Original factory engine pending.":"Original engine not connected.",15);
+        text(index==2?"Original Modelmaker source retained. Inspection connected; training dependencies pending.":"Original engine adapter installed. Execution requires the local Linux engine to be ready.",15);
         EditText task=new EditText(this); task.setHint("Give this agent a directive"); task.setTextColor(Color.WHITE); task.setHintTextColor(Color.LTGRAY); body.addView(task);
         button("Save directive", () -> {
             String value=task.getText().toString().trim(); if(value.isEmpty()) {task.setError("Enter a directive");return;}
@@ -79,7 +94,42 @@ public class MainActivity extends Activity {
         try(Cursor c=database.rawQuery("SELECT directive,status FROM jobs WHERE agent=? ORDER BY rowid DESC",new String[]{names[index]})) {
             while(c.moveToNext()) text(c.getString(0)+"\n"+c.getString(1),15);
         }
+        text("Run the original tool belt",22);
+        EditText parameters = new EditText(this); parameters.setTextColor(Color.WHITE); parameters.setMinLines(3); body.addView(parameters);
+        String[] examples = {
+            "{\"request\":{\"purpose\":\"orchestrate a workflow system\",\"dimension\":\"Space\"},\"input\":\"sense build test mount\"}",
+            "{\"configuration\":{\"seed\":1,\"nodeCount\":4},\"input\":[0,0,0,0]}",
+            "{}",
+            "{\"requests\":[{\"purpose\":\"analyze and learn\",\"dimension\":\"Evolution\",\"level\":4},{\"purpose\":\"create grammar rule\",\"dimension\":\"Design\",\"level\":5}],\"input\":\"signal\"}"
+        };
+        parameters.setText(examples[index]);
+        text("Editable engine inputs. These examples do not apply a personal birth configuration.",13);
+        button(index==2?"Inspect Modelmaker":"Run tool belt", () -> {
+            try {
+                String[] capabilities={"tool.create","neural.compose","modelmaker.inspect","ato.connect"};
+                JSONObject job=new JSONObject(); job.put("capability",capabilities[index]); job.put("parameters",new JSONObject(parameters.getText().toString()));
+                worker.execute(() -> {try { String result=engineRequest("POST","/api/jobs",job.toString()); runOnUiThread(() -> {if(!closing)engineJobs();}); }
+                    catch(Exception error){runOnUiThread(() -> {if(!closing)parameters.setError(error.getMessage());});}});
+            }catch(Exception error){parameters.setError("Enter valid engine inputs as a JSON object");}
+        });
         button("Workspace",this::home);
+    }
+    private String engineRequest(String method,String path,String body) throws Exception {
+        HttpURLConnection connection=(HttpURLConnection)new URL("http://127.0.0.1:4183"+path).openConnection();
+        connection.setConnectTimeout(1500); connection.setReadTimeout(5000); connection.setRequestMethod(method);
+        connection.setRequestProperty("Authorization","Bearer "+sessionToken);
+        try {
+            if(body!=null){connection.setDoOutput(true);connection.setRequestProperty("Content-Type","application/json");try(OutputStream out=connection.getOutputStream()){out.write(body.getBytes(StandardCharsets.UTF_8));}}
+            int code=connection.getResponseCode(); InputStream stream=code<400?connection.getInputStream():connection.getErrorStream();
+            ByteArrayOutputStream output=new ByteArrayOutputStream(); if(stream!=null)try(InputStream in=stream){byte[] block=new byte[8192];int n;while((n=in.read(block))!=-1){if(output.size()+n>4*1024*1024)throw new IOException("Engine response exceeds display limit");output.write(block,0,n);}}
+            String result=output.toString("UTF-8");if(code>=400)throw new IOException(result);return result;
+        }finally{connection.disconnect();}
+    }
+    private void engineJobs(){
+        screen("Engine jobs & results");TextView report=text("Reading local engine…",14);report.setTextIsSelectable(true);
+        button("Refresh",this::engineJobs);button("Workspace",this::home);
+        worker.execute(() -> {try{String response=new JSONObject(engineRequest("GET","/api/status",null)).toString(2);runOnUiThread(() -> {if(!closing)report.setText(response);});}
+            catch(Exception error){runOnUiThread(() -> {if(!closing)report.setText("Local engine unavailable: "+error.getMessage());});}});
     }
     private void piece(String id) {
         screen("Preserved piece");
@@ -100,7 +150,7 @@ public class MainActivity extends Activity {
     private void importPiece(Uri uri) throws Exception {
         String name="Imported piece";
         try(Cursor c=getContentResolver().query(uri,new String[]{OpenableColumns.DISPLAY_NAME},null,null,null)) {if(c!=null&&c.moveToFirst())name=c.getString(0);}
-        File originals=new File(getFilesDir(),"originals"); if(!originals.exists()&&!originals.mkdirs())throw new IOException("Cannot create storage");
+        File originals=new File(getFilesDir(),"fantastic4-data/originals"); if(!originals.exists()&&!originals.mkdirs())throw new IOException("Cannot create storage");
         String id=UUID.randomUUID().toString();File saved=new File(originals,id);long size=0;
         try {
             MessageDigest digest=MessageDigest.getInstance("SHA-256");
@@ -124,5 +174,5 @@ public class MainActivity extends Activity {
             database.execSQL("INSERT INTO packages VALUES(?,?,?,?,?)",new Object[]{id,name,hash.toString(),size,inventory.toString()});
         } catch(Exception error){saved.delete();throw error;}
     }
-    @Override protected void onDestroy(){super.onDestroy();worker.shutdown();}
+    @Override protected void onDestroy(){closing=true;if(runtime!=null)runtime.stop();super.onDestroy();worker.shutdownNow();}
 }

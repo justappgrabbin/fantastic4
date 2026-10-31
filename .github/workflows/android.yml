@@ -1,4 +1,4 @@
-name: Native Android APK
+name: Fantastic4 native Android and existing engines
 on:
   push:
     paths-ignore: ['**/*.md']
@@ -6,9 +6,27 @@ on:
 permissions:
   contents: read
 jobs:
+  engines:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify original source hashes
+        run: node scripts/verify-lineage.mjs
+      - name: Test original ATO and Tool Factory
+        run: |
+          node --test --test-isolation=none runtime/vendor/ato-core/test/*.test.mjs
+          node --test --test-isolation=none runtime/vendor/tool-factory/test/integrated-tool-factory.test.mjs
+          python -m unittest discover -s runtime/vendor/modelmaker -p test_contracts.py -v
+      - name: Test connected corner workers and persistence
+        run: node --test --test-isolation=none runtime/test/*.test.mjs
+      - name: Test authenticated local engine API
+        run: node runtime/test/http-smoke.mjs
   apk:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -16,47 +34,64 @@ jobs:
           distribution: temurin
           java-version: '17'
       - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
+          log-accepted-android-sdk-licenses: 'false'
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.11.1'
-      - name: Install Android platform
-        run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
-      - name: Build native APK and run lint
-        run: gradle --no-daemon :app:assembleDebug :app:lintDebug
-      - name: Verify APK signature and manifest
-        run: |
-          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose app/build/outputs/apk/debug/app-debug.apk
-          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging app/build/outputs/apk/debug/app-debug.apk > apk-manifest.txt
-          sha256sum app/build/outputs/apk/debug/app-debug.apk > apk-sha256.txt
-      - name: Enable emulator acceleration
-        run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
-      - name: Native app launch smoke test
-        uses: reactivecircus/android-emulator-runner@v2
+      - uses: docker/setup-qemu-action@v3
         with:
-          api-level: 35
-          arch: x86_64
-          disable-animations: true
-          script: |
-            adb install app/build/outputs/apk/debug/app-debug.apk
-            adb shell am start -W -n com.fourcorners.computer/.MainActivity
-            adb shell pidof com.fourcorners.computer
-            adb shell uiautomator dump /sdcard/window.xml
-            adb pull /sdcard/window.xml native-screen.xml
-            grep -q 'Four Corners' native-screen.xml
-            adb exec-out screencap -p > native-screen.png
-      - name: Upload APK and evidence
-        if: always()
+          platforms: arm64
+      - uses: docker/setup-buildx-action@v3
+      - name: Build original Alpine Node host with existing engines
+        run: |
+          docker buildx build --platform linux/arm64 --file linux/Dockerfile --tag fantastic4-arm64 --load .
+          docker run --rm --platform linux/arm64 fantastic4-arm64 node /opt/fantastic4/test/http-smoke.mjs
+          mkdir -p /tmp/fantastic4-rootfs app/src/main/assets
+          container="$(docker create --platform linux/arm64 fantastic4-arm64)"
+          docker export "$container" | tar -C /tmp/fantastic4-rootfs -xf -
+          docker rm "$container"
+          test -x /tmp/fantastic4-rootfs/usr/local/bin/node
+          test -f /tmp/fantastic4-rootfs/opt/fantastic4/vendor/ato-core/src/index.mjs
+          tar --hard-dereference -C /tmp/fantastic4-rootfs -czf app/src/main/assets/linux-rootfs.bundle .
+          printf '%s-fantastic4-1\n' "$GITHUB_SHA" > app/src/main/assets/linux-rootfs.version
+      - name: Build PRoot using original pinned 5.8 build recipe
+        env:
+          OPENMINIS_COMMIT: 4ef29002e88db1e20e462ec2ff46916e8a7dcb45
+          NDK_VERSION: 28.0.13004108
+        run: |
+          sdkmanager "ndk;$NDK_VERSION"
+          git clone https://github.com/OpenMinis/OpenMinis.git /tmp/openminis
+          git -C /tmp/openminis checkout "$OPENMINIS_COMMIT"
+          git -C /tmp/openminis submodule update --init --recursive
+          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/$NDK_VERSION"
+          bash /tmp/openminis/deps/build_proot.sh
+          mkdir -p app/src/main/jniLibs/arm64-v8a app/src/main/assets/licenses
+          cp /tmp/openminis/src/android/app/src/main/jniLibs/arm64-v8a/libproot*.so app/src/main/jniLibs/arm64-v8a/
+          test "$(sha256sum app/src/main/jniLibs/arm64-v8a/libproot-loader.so | awk '{print $1}')" = '44ef39c1e1a18c09f6e4c4b5d6f8bba82d30596598bd155ec162d05c5122ff04'
+          test "$(sha256sum app/src/main/jniLibs/arm64-v8a/libproot-loader32.so | awk '{print $1}')" = '25f6bd90bc5a3d3088026289a0d3eaf3e502bd2b00e5cb74fadd9791132efa34'
+          find /tmp/openminis/deps/proot -maxdepth 2 -type f \( -iname 'COPYING*' -o -iname 'LICENSE*' \) -exec cp {} app/src/main/assets/licenses/ \;
+          printf 'PRoot host recipe: SynthAi d901b3e15aa7c99a32fbb15e9b0680d77243249b\nOpenMinis: %s\n' "$OPENMINIS_COMMIT" > app/src/main/assets/licenses/linux-runtime-provenance.txt
+      - name: Compile native Android and lint
+        run: gradle --no-daemon :app:assembleDebug :app:lintDebug
+      - name: Verify APK includes running-engine payload
+        run: |
+          APK=app/build/outputs/apk/debug/app-debug.apk
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose "$APK"
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$APK" > apk-manifest.txt
+          unzip -l "$APK" > apk-contents.txt
+          grep -q 'lib/arm64-v8a/libproot.so' apk-contents.txt
+          grep -q 'assets/linux-rootfs.bundle' apk-contents.txt
+          sha256sum "$APK" > apk-sha256.txt
+      - name: Upload installable APK and build evidence
         uses: actions/upload-artifact@v4
         with:
-          name: Four-Corners-native-Android
+          name: Fantastic4-native-Android-arm64
           path: |
             app/build/outputs/apk/debug/app-debug.apk
             app/build/reports/lint-results-debug.html
             apk-manifest.txt
+            apk-contents.txt
             apk-sha256.txt
-            native-screen.xml
-            native-screen.png
-          if-no-files-found: warn
+          if-no-files-found: error

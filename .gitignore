@@ -2,3 +2,8 @@
 local.properties
 **/build/
 *.jks
+
+**/__pycache__/
+runtime/workspace/
+app/src/main/assets/linux-rootfs.*
+app/src/main/jniLibs/

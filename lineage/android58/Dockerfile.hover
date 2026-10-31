@@ -1,0 +1,32 @@
+# Hover face rootfs: minimal Alpine + Node 22 + Synthia 5.8 at /opt/synthia58.
+# No Synthia Server, no Python. Started on the phone by HoverRuntime via PRoot:
+#   node /opt/synthia58/src/ui/server.mjs   (cwd /opt/synthia58)
+FROM node:22-alpine3.22
+
+# 5.8 has no npm dependencies; drop the package managers to keep the rootfs small.
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx \
+           /usr/local/bin/corepack /usr/local/lib/node_modules/corepack \
+           /opt/yarn-* /usr/local/bin/yarn /usr/local/bin/yarnpkg \
+    && apk add --no-cache ca-certificates tzdata
+
+# Byte-identical copy of the vendored 5.8 app (see computer/donors/synthia58/README.synthai-vendor.md).
+COPY computer/donors/synthia58/Synthia-Solo-Hover-v0.5.8 /opt/synthia58
+
+RUN mkdir -p /var/lib/synthai/synthia58 /root /tmp \
+    && node --version \
+    && test -f /opt/synthia58/src/ui/server.mjs \
+    && test -f /opt/synthia58/ui/index.html \
+    && node --check /opt/synthia58/src/ui/server.mjs \
+    && test ! -e /usr/bin/python3 \
+    && test ! -e /opt/synthia-server \
+    && test ! -e /opt/synthia58/backups
+
+WORKDIR /opt/synthia58
+
+ENV HOME=/root
+ENV PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ENV PORT=4183
+ENV SYNTHIA_DATA_DIR=/var/lib/synthai/synthia58
+ENV SYNTHIA_ANDROID_BRIDGE_URL=http://127.0.0.1:8797
+
+CMD ["node", "/opt/synthia58/src/ui/server.mjs"]

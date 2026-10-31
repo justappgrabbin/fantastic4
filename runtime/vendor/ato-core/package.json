@@ -1,0 +1,10 @@
+{
+  "name": "@ato/core",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Address-directed tool builder vertical slice",
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "demo": "node demo.mjs"
+  }
+}

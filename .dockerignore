@@ -1,0 +1,7 @@
+.git
+.gradle
+app
+lineage
+**/__pycache__
+**/build
+runtime/workspace

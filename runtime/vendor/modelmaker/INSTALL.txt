@@ -1,0 +1,1 @@
+Read README.md. Install requirements.txt in a Python virtual environment, then run python app.py. Keep every Python module together; app.py imports training_contract, solution_policy, klein_verifier and solution_inference. Local training needs no API key or pretrained weights. Run test_contracts.py and smoke_training.py before deploying.
