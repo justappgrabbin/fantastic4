@@ -2,7 +2,7 @@ import { mkdir, readFile, writeFile, rename, readdir } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
-import { Automaton, AutomataMesh } from './vendor/ato-core/src/index.mjs';
+import { Automaton, AutomataMesh, bootstrapATO } from './vendor/ato-core/src/index.mjs';
 import { IntegratedToolFactory, ATONativeBridge } from './vendor/tool-factory/src/integrated-tool-factory.mjs';
 import { MCPHub } from './vendor/adaya/MCPHub.js';
 import { NeuralArchitectureRuntime } from './vendor/neural/architectureModulation.mjs';
@@ -16,7 +16,7 @@ export const CORNERS = Object.freeze([
 const digest = value => createHash('sha256').update(value).digest('hex');
 async function atomic(path, value) {const temp=path+'.'+randomUUID()+'.tmp';await writeFile(temp,JSON.stringify(value,null,2));await rename(temp,path);}
 export class Harness {
- constructor(directory){this.directory=resolve(directory);this.hub=new MCPHub({maxParallel:4});this.hub.verify=async(_task,result)=>({ok:await this.verify(result),quality:1});this.neural=new NeuralArchitectureRuntime();this.pending=new Map();this.tails=new Map();
+ constructor(directory){this.directory=resolve(directory);this.hub=new MCPHub({maxParallel:4});this.hub.verify=async(_task,result)=>({ok:await this.verify(result),quality:1});this.neural=new NeuralArchitectureRuntime();this.atoSystem=bootstrapATO();this.pending=new Map();this.tails=new Map();
   for(const corner of CORNERS)this.hub.registerProvider({id:corner.id,capabilities:[corner.capability],execute:task=>this.runCorner(corner,task)});
  }
  async initialize(){for(const name of ['jobs','artifacts','originals'])await mkdir(join(this.directory,name),{recursive:true});
@@ -25,10 +25,11 @@ export class Harness {
   return this;
  }
  async snapshot(){const jobs=[];for(const name of await readdir(join(this.directory,'jobs')))if(name.endsWith('.json'))jobs.push(JSON.parse(await readFile(join(this.directory,'jobs',name),'utf8')));
-  return {ok:true,runtime:'fantastic4-linux',corners:CORNERS, jobs:jobs.sort((a,b)=>b.created.localeCompare(a.created)), reasoning:'No autonomous language-model planner connected',personalization:{humanDesign:'awaiting supplied configuration adapter',spaceTime:'original tool routing only; person-specific configuration not connected'},population:'Four worker providers coordinate existing Automatons; no population is discarded'};
+  return {ok:true,runtime:'fantastic4-linux',corners:CORNERS,automatons:this.atoSystem.manifests,profile:this.atoSystem.profile, jobs:jobs.sort((a,b)=>b.created.localeCompare(a.created)), reasoning:'No autonomous language-model planner connected',personalization:{humanDesign:'awaiting supplied configuration adapter',spaceTime:'original tool routing only; person-specific configuration not connected'},population:'Four worker providers and 13 bootstrapped original ATO Automatons; original files retained'};
  }
  async submit(spec){if(!spec||!CORNERS.some(c=>c.capability===spec.capability))throw new Error('Unknown capability');
   if(!spec.parameters||typeof spec.parameters!=='object'||Array.isArray(spec.parameters))throw new Error('parameters must be an object');
+  if(Buffer.byteLength(JSON.stringify(spec.parameters))>65536)throw new Error('Job inputs exceed 64 KB');
   const id=randomUUID(),corner=CORNERS.find(c=>c.capability===spec.capability);
   const job={id,agent:corner.id,capability:spec.capability,parameters:spec.parameters,created:new Date().toISOString(),status:'queued'};
   await atomic(join(this.directory,'jobs',id+'.json'),job);

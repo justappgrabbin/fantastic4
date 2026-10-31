@@ -21,12 +21,13 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 
-/** Native offline workspace. No WebView, server, network permission or simulated inference. */
+/** Native Android workspace with authenticated, phone-local Linux execution. No WebView. */
 public class MainActivity extends Activity {
     private SQLiteDatabase database;
     private LinuxRuntime runtime;
     private String sessionToken;
     private volatile boolean closing;
+    private File pendingExport;
     private LinearLayout body;
     private TextView status;
     private Button intake;
@@ -66,7 +67,7 @@ public class MainActivity extends Activity {
         body.setBackgroundColor(Color.rgb(18,26,21)); scroll.addView(body); setContentView(scroll); text(title,30);
     }
     private void home() {
-        screen("Four Corners"); text("Your workspace lives on this phone.",16);
+        screen("Fantastic4"); text("Your workspace lives on this phone.",16);
         text("Original ATO, Tool Factory and neural-composition engines · no autonomous model planner yet.",14);
         intake = button("Bring a piece", () -> {
             Intent pick = new Intent(Intent.ACTION_OPEN_DOCUMENT); pick.setType("*/*"); pick.addCategory(Intent.CATEGORY_OPENABLE);
@@ -75,6 +76,7 @@ public class MainActivity extends Activity {
         status = text("Sources are retained in private device storage.",14);
         for (int i=0;i<names.length;i++) { final int corner=i; button(names[i], () -> agent(corner)); }
         button("Engine jobs & results", this::engineJobs);
+        button("Created programs & artifacts", this::artifacts);
         text("Your pieces",22);
         try(Cursor cursor=database.rawQuery("SELECT id,name FROM packages ORDER BY rowid DESC",null)) {
             if(cursor.getCount()==0) text("Nothing imported yet.",16);
@@ -88,7 +90,7 @@ public class MainActivity extends Activity {
         EditText task=new EditText(this); task.setHint("Give this agent a directive"); task.setTextColor(Color.WHITE); task.setHintTextColor(Color.LTGRAY); body.addView(task);
         button("Save directive", () -> {
             String value=task.getText().toString().trim(); if(value.isEmpty()) {task.setError("Enter a directive");return;}
-            database.execSQL("INSERT INTO jobs VALUES(?,?,?,?)",new Object[]{UUID.randomUUID().toString(),names[index],value,"Waiting for executable engine"});
+            database.execSQL("INSERT INTO jobs VALUES(?,?,?,?)",new Object[]{UUID.randomUUID().toString(),names[index],value,"Saved directive · autonomous planner not connected"});
             agent(index);
         });
         try(Cursor c=database.rawQuery("SELECT directive,status FROM jobs WHERE agent=? ORDER BY rowid DESC",new String[]{names[index]})) {
@@ -131,6 +133,22 @@ public class MainActivity extends Activity {
         worker.execute(() -> {try{String response=new JSONObject(engineRequest("GET","/api/status",null)).toString(2);runOnUiThread(() -> {if(!closing)report.setText(response);});}
             catch(Exception error){runOnUiThread(() -> {if(!closing)report.setText("Local engine unavailable: "+error.getMessage());});}});
     }
+    private void artifacts() {
+        screen("Created programs & artifacts");
+        text("Outputs from your local engines. Originals remain in the workspace when you save a copy.",15);
+        File root=new File(getFilesDir(),"fantastic4-data/artifacts"); File[] jobs=root.listFiles();int count=0;
+        if(jobs!=null)for(File job:jobs){if(!job.isDirectory())continue;File[] outputs=job.listFiles();if(outputs==null)continue;
+            for(File file:outputs){if(!file.isFile())continue;count++;button(file.getName(), () -> artifact(file));}}
+        if(count==0)text("No output artifacts yet. Run a connected tool belt first.",16);
+        button("Workspace",this::home);
+    }
+    private void artifact(File file) {
+        screen(file.getName());
+        try {byte[] bytes=java.nio.file.Files.readAllBytes(file.toPath());if(bytes.length>2*1024*1024)throw new IOException("Use Save a copy for this large artifact");text(new String(bytes,StandardCharsets.UTF_8),14).setTextIsSelectable(true);}
+        catch(Exception error){text(error.getMessage(),14);}
+        button("Save a copy", () -> {pendingExport=file;Intent save=new Intent(Intent.ACTION_CREATE_DOCUMENT);save.addCategory(Intent.CATEGORY_OPENABLE);save.setType("application/octet-stream");save.putExtra(Intent.EXTRA_TITLE,file.getName());startActivityForResult(save,2);});
+        button("Artifacts",this::artifacts);
+    }
     private void piece(String id) {
         screen("Preserved piece");
         try(Cursor c=database.rawQuery("SELECT name,digest,bytes,inventory FROM packages WHERE id=?",new String[]{id})) {
@@ -140,6 +158,14 @@ public class MainActivity extends Activity {
     }
     @Override protected void onActivityResult(int request,int result,Intent intent) {
         super.onActivityResult(request,result,intent);
+        if(request==2&&result==RESULT_OK&&intent!=null&&intent.getData()!=null&&pendingExport!=null){
+            File file=pendingExport;pendingExport=null;Uri destination=intent.getData();worker.execute(() -> {
+                try(InputStream in=new FileInputStream(file);OutputStream out=getContentResolver().openOutputStream(destination)){
+                    if(out==null)throw new IOException("Destination unavailable");byte[] block=new byte[32768];int n;while((n=in.read(block))!=-1)out.write(block,0,n);
+                    runOnUiThread(() -> {if(!closing)Toast.makeText(this,"Artifact copy saved",Toast.LENGTH_LONG).show();});
+                }catch(Exception error){runOnUiThread(() -> {if(!closing)Toast.makeText(this,"Save failed: "+error.getMessage(),Toast.LENGTH_LONG).show();});}
+            });return;
+        }
         if(request!=1||result!=RESULT_OK||intent==null||intent.getData()==null)return;
         Uri uri=intent.getData(); intake.setEnabled(false); status.setText("Preserving and inspecting…");
         worker.execute(() -> {

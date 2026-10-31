@@ -7,6 +7,7 @@ import { Harness } from '../harness.mjs';
 const setup=async()=>new Harness(await mkdtemp(join(tmpdir(),'fantastic4-'))).initialize();
 test('four original-engine workers produce distinct verifiable artifacts',async()=>{
  const h=await setup();
+ const state=await h.snapshot();assert.equal(state.automatons.length,13);assert.equal(state.profile.personalized,false);
  const specs=[
  {capability:'tool.create',parameters:{request:{purpose:'orchestrate a workflow system',dimension:'Space'},input:'sense build test mount'}},
  {capability:'neural.compose',parameters:{configuration:{seed:7,nodeCount:4},input:[1,2,3,4]}},

@@ -5,11 +5,11 @@ Native Android interface + self-hosted Linux engine built from the owner's exist
 ## What is connected
 
 - Original Integrated Tool Factory creates, executes and exports bounded executable tools.
-- Original ATO Core creates and runs typed multi-tool meshes.
+- Original ATO Core boots its 13 supplied Automatons and creates and runs typed multi-tool meshes.
 - Original Adaya MCPHub routes work to four distinct tool belts with separate queues. The adapter requires output artifacts and checksums, replacing the hub's permissive default success check without editing the original module.
 - Original neural architecture generator creates and evaluates lightweight compositions. These are the source's mathematical surrogates, not full production transformer/diffusion/GAN models.
 - Original Stellarproximology Modelmaker source and contracts are retained. Its corner can inspect requirements; actual training is not provisioned.
-- Jobs, failures and artifacts persist on the phone. Interrupted jobs are reported as interrupted after restart.
+- Jobs, failures and artifacts persist on the phone. Generated program/artifact files can be viewed and exported through Android’s document picker. Interrupted jobs are reported as interrupted after restart.
 
 This is not yet an autonomous self-building computer. No language-model planner is installed. Personal Human Design and SpaceTime configuration adapters remain unconnected; no personalized dimensional assignment has been invented. Incoming packages are preserved and listed, not automatically executed or integrated.
 
